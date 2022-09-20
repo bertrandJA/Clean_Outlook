@@ -1,4 +1,4 @@
-# Clean_Outloook
+# Clean_Outlook
 Clean duplicate messages in Outlook (keep last messages of a conversation)
 
 This script reads to your local Outlook (not to the web).
