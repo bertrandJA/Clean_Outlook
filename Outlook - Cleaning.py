@@ -7,8 +7,8 @@ from PySide6 import QtCore, QtWidgets, QtGui
 FOLDER_SIZE_LIMIT = 20000 #Can be adapted
 EXCLUDED_FOLDERS = [] #Here you may exclude the scanning of some folders, by their name. Ex: ['Boîte de réception',]
 INCLUDE_SUBFOLDERS = True #You might want to scan only top directory
-LOGGING_LEVEL = logging.DEBUG #DEBUG, INFO, WARNING, ERROR, CRITICAL
-VERSION = "2022-09-16"
+LOGGING_LEVEL = logging.INFO #DEBUG, INFO, WARNING, ERROR, CRITICAL
+VERSION = "2023-01-03"
 HELP_TEXT = """This program will:
 
 1) scan your local outlook mail boxes
@@ -210,6 +210,7 @@ class MainWindow(ui_MainWindow): #Adds logic to the interface widgets
     @QtCore.Slot()
     def launch_search_f(self): #Triggered by find_button
         self.OtherMessage = ""
+        self.result_label.setText("") #Reset result text from possible previous execution
         self.worker_search = Worker(self.search_duplicates_b)
         self.worker_search.signals.progress.connect(self.search_duplicates_b_progress)
         self.worker_search.signals.newStep.connect(self.initiate_new_step)
@@ -237,11 +238,11 @@ class MainWindow(ui_MainWindow): #Adds logic to the interface widgets
     @QtCore.Slot()
     def selectAll_changed_f(self, status): #Triggered by the checkbox to select/unselect all messages
         self.del_model.beginResetModel() #Warn the model that data will change in background
-        if status == QtCore.Qt.Checked:
+        if status == 2: #QtCore.Qt.Checked: #pyinstaller doesn't convert Qt constants to int !
             self.del_model._df.toDelete = True #Select all messages for deletion
-        elif status == QtCore.Qt.Unchecked:
+        elif status == 0: #QtCore.Qt.Unchecked:
             self.del_model._df.toDelete = False #Deselect all messages
-        elif status == QtCore.Qt.PartiallyChecked:
+        elif status == 1: #QtCore.Qt.PartiallyChecked:
             if not(self.del_model.partially_checked): #Partially_checked can only be set by self.update_total, not by user
                 self.selectAll_checkbox.setCheckState(QtCore.Qt.Checked)
         self.del_model.endResetModel()  #Inform data changed, and view should be updated
@@ -290,7 +291,7 @@ class MainWindow(ui_MainWindow): #Adds logic to the interface widgets
 
         try:
             top_folder = inbox
-            #top_folder = inbox.Folders["4-SUPP"].Folders["Test WIP"]
+            #top_folder = inbox.Folders["4-SUPP"].Folders["Réunions"]
             #top_folder = inbox.Folders["Boîte de réception"] Éléments supprimés
             #top_folder = inbox.Folders["Éléments supprimés"]
         except:
@@ -299,7 +300,7 @@ class MainWindow(ui_MainWindow): #Adds logic to the interface widgets
         self.cols_del = ['folderName', 'conversationID', 'ID', 'date', 'subject', 'topic', 'senderMail', 'toDelete', 'mess_size']
         folders, self.total_email_count = self.get_subFolders(top_folder, '', 1) #List all subfolders
 
-        self.worker_search.signals.newStep.emit("Step 1/2 - Read all messages", 0, self.total_email_count)
+        self.worker_search.signals.newStep.emit(f"Step 1/2 - Read all {self.total_email_count} messages", 0, self.total_email_count)
         messageList = pd.DataFrame()
         deleteList = pd.DataFrame()
         count_read_mails = 0
@@ -325,9 +326,6 @@ class MainWindow(ui_MainWindow): #Adds logic to the interface widgets
                         body_included = False
                         if mess.body in mess2.body: #Second check:mess body is fully included in mess2
                             body_included = True
-                        elif "<mailto:" in mess.body or "<mailto:" in mess2.body: #Difference may com from formatted mail
-                            if self.remove_mailtos(mess.body) in  self.remove_mailtos(mess2.body):
-                                body_included = True
                         if body_included:
                             mess.body="" #We don't need body anymore
                             record = pd.DataFrame([[mess.folderName, mess.conversationID, mess.ID, mess.date, mess.subject, mess.topic, mess.senderName, mess.toDelete, mess.mess_size]], columns=self.cols_del)
@@ -340,6 +338,13 @@ class MainWindow(ui_MainWindow): #Adds logic to the interface widgets
 
     def search_duplicates_b_return(self, deleteList):
         self.del_model = Delete_TableModel(deleteList) #Populate table of results
+
+        self.proxyModel = QtCore.QSortFilterProxyModel() #Allow sorting by colum. Doesn't work
+        self.proxyModel.setSourceModel(self.del_model)
+        self.result_table.setSortingEnabled(True)
+        self.result_table.sortByColumn(0, QtCore.Qt.AscendingOrder)
+        self.result_table.reset()
+
         self.del_model.dataChanged.connect(self.update_total) #Receive signal sent by model when selected mails change
         self.del_model.modelReset.connect(self.update_total)  #Receive signal sent by model when df is updated after deletion
         self.update_total() #Initiate total
@@ -347,7 +352,7 @@ class MainWindow(ui_MainWindow): #Adds logic to the interface widgets
         self.find_button.setEnabled(True)
         self.mailbox_choice.setEnabled(True)
         self.result_group.show()    #Show widgets that will display results
-        self.result_table.setModel(self.del_model) #Show results in TableView
+        self.result_table.setModel(self.proxyModel) #Show results in TableView
         self.result_table.resizeColumnsToContents()
 
     def search_duplicates_b_progress(self, n,): #call back function to trak progress of search_duplicates_b()
@@ -370,40 +375,48 @@ class MainWindow(ui_MainWindow): #Adds logic to the interface widgets
         for message in messages: #loop on all messages of folder
             if self.interrupt:
                 raise KeyboardInterrupt("User clicked on Cancel")
-            ID = message.EntryID
-            date =  message.CreationTime #.date()   #message.Senton.date() does not always work
-            date = datetime.datetime.combine(date.date(), date.time()) #convert to datetime
-            subject = message.Subject
-            topic = message.ConversationTopic.strip()
-            conversationID = message.ConversationID
-            isUnread = message.UnRead
-            senderName = getattr(message, 'SenderName', None) #sometimes (messages undelivered or recalled) there is no sender
-            senderMail = getattr(message, 'SenderEmailAddress', None)
-            mess_size = message.Size
-            atts = []
-            if senderName is None: #Recalled or undelivered messages have no sender
-                toDelete = isUnread==False #delete only unread messages
-                body = ""
+            ID = getattr(message, 'EntryID', None)
+            if ID is None: #Sometimes, recalled messages don't have an ID. We have to exclude them
+                logging.error(f"One recalled message in {folderName} could not be treated")
             else:
-                toDelete = False
-                body = message.Body #.HTMLbody, .RTFBody, .bodyFormat
-                attachments = message.Attachments
-                for att in attachments:
-                    try:
-                        attName = [getattr(att, 'FileName', att.DisplayName)]
-                        atts += attName
-                    except:
-                        if att.Type != 6: #Normally, only type 6 should raise an error
-                            logging.error(f"Type Error for: {date} | {subject} | {att.DisplayName} | {att.Type}")
-                        #1-Office, 5-Mail, 6-Img (OLE Document), 7-Link Office
-                        #https://docs.microsoft.com/en-us/dotnet/api/microsoft.office.interop.outlook.olattachmenttype?view=outlook-pia
-                atts.sort()
-            record = [[folderName, conversationID, ID, date, subject, topic, isUnread, senderName, senderMail, toDelete, body, atts, mess_size]]
-            messageList += record
-            count_read_mails += 1
-            self.worker_search.signals.progress.emit(count_read_mails)
+                date =  message.CreationTime #.date()   #message.Senton.date() does not always work
+                date = datetime.datetime.combine(date.date(), date.time()) #convert to datetime
+                subject = message.Subject
+                topic = message.ConversationTopic.strip()
+                conversationID = message.ConversationID
+                isUnread = message.UnRead
+                senderName = getattr(message, 'SenderName', None) #sometimes (messages undelivered or recalled) there is no sender
+                senderMail = getattr(message, 'SenderEmailAddress', None)
+                mess_size = message.Size
+                atts = []
+                if senderName is None: #Recalled or undelivered messages have no sender
+                    toDelete = isUnread==False #delete only unread messages
+                    body = ""
+                else:
+                    toDelete = False
+                    body = ''.join([line.strip() for line in message.Body.splitlines()]) #We remove line breaks followed by spaces that are sometimes changed in replies
+                    if "<mailto:" in body: #Sometimes the name is inserted in the mail of a reply. We remove it
+                        body = self.remove_mailtos(body)
+                    if " <http" in body: #Sometimes the URL is modified. We remove it
+                        body = self.remove_urls(body)
+                    attachments = message.Attachments
+                    for att in attachments:
+                        try:
+                            attName = [getattr(att, 'FileName', att.DisplayName)]
+                            atts += attName
+                        except:
+                            if att.Type != 6: #Normally, only type 6 should raise an error
+                                logging.error(f"Type Error for: {date} | {subject} | {att.DisplayName} | {att.Type}")
+                            #1-Office, 5-Mail, 6-Img (OLE Document), 7-Link Office
+                            #https://docs.microsoft.com/en-us/dotnet/api/microsoft.office.interop.outlook.olattachmenttype?view=outlook-pia
+                    atts.sort()
+                record = [[folderName, conversationID, ID, date, subject, topic, isUnread, senderName, senderMail, toDelete, body, atts, mess_size]]
+                messageList += record
+                count_read_mails += 1
+                self.worker_search.signals.progress.emit(count_read_mails)
         cols = ["folderName", "conversationID", "ID", "date", "subject", "topic", "isUnread", "senderName", "senderMail", "toDelete", "body", "atts", "mess_size"]
         messageList = pd.DataFrame(messageList, columns = cols)
+        messageList = messageList.astype({"isUnread":bool,"toDelete":bool}) #cast columns to bool to avoid FutureWarning
         deleteList = messageList[messageList['toDelete'] == True][self.cols_del]
         messageList = messageList[messageList['toDelete'] == False]
         messageList = messageList.sort_values(by=['date'], ascending=[True])
@@ -411,11 +424,26 @@ class MainWindow(ui_MainWindow): #Adds logic to the interface widgets
 
     def remove_mailtos(self, body):
         """Called by search_duplicates_b. Remove the <mailto:> tag that is sometimes inserted after a mail"""
-        pattern = " <mailto:[\w.\-]+@[\w.\-]+.\w+> " #search for "<mailto:" followed by a mail
+        pattern = " <mailto:[\w.\-]+@[\w.\-]+.\w+> ?" #search for " <mailto:" followed by a mail
         mailtos = re.findall(pattern, body)
         mailtos = list(dict.fromkeys(mailtos)) #remove duplicates
         for mailto in mailtos:
             body = body.replace(mailto, '')
+        return body
+
+    def remove_urls(self, body):
+        """Called by search_duplicates_b. Remove the <https:> tag that is sometimes inserted after an URL"""
+        pattern = r" <https?:\/\/[\w.\-\+\/]+> ?" #search for " <http(s)://...>"
+        nb_char_deleted = 0 #positions will be shifted if we delete content
+        for url in re.finditer(pattern, body):
+            url_bare = url.group()[2:-1]
+            if url_bare[-1] == ">": #sometimes an additional space is inserted
+                url_bare = url_bare[:-1]
+            pos = body[:url.start()-nb_char_deleted].rfind(url_bare) #Verify that this is the duplicate text of the URL
+            if pos != -1:
+                if (pos+len(url_bare)) == (url.start()-nb_char_deleted):
+                    body = body[:url.start()-nb_char_deleted] + body[url.end()-nb_char_deleted:]
+                    nb_char_deleted += url.end() - url.start()
         return body
 
     @QtCore.Slot()
@@ -473,11 +501,6 @@ class MainWindow(ui_MainWindow): #Adds logic to the interface widgets
         self.threadpool = None
         event.accept()
 
-    #def quitOutlook_b(self, progress_callback):
-        #self.namespace.Logoff()
-        #self.outlook.Application.Quit()   #Quit Outlook. Also quits outlook opened by the user !
-        #self.outlook.Quit() #https://stackoverflow.com/questions/12705249/error-connecting-to-outlook-via-com
-
 class Delete_TableModel(QtCore.QAbstractTableModel): #will hold the list of deleted mails to be displayed in QTableView
 
     def __init__(self, data):
@@ -523,7 +546,8 @@ class Delete_TableModel(QtCore.QAbstractTableModel): #will hold the list of dele
             return str(value)
         elif role == QtCore.Qt.CheckStateRole:
             if column_name == "toDelete": #In this column, we display a checkbox
-                return int(QtCore.Qt.Checked if value else QtCore.Qt.Unchecked)
+                #return int(QtCore.Qt.Checked if value else QtCore.Qt.Unchecked)
+                return 2 if value else 0 #pyinstaller doesn't convert Qt constants to int !
 
     def flags(self, index): #flags to allow modifications
         column_name, col = self.get_column_pos(index)
@@ -537,7 +561,8 @@ class Delete_TableModel(QtCore.QAbstractTableModel): #will hold the list of dele
         if role == QtCore.Qt.CheckStateRole:
             column_name, col = self.get_column_pos(index)
             if column_name == "toDelete":
-                checked = (value == int(QtCore.Qt.Checked))
+                #checked = (value == int(QtCore.Qt.Checked))
+                checked = (value == 2)
                 self._df.iloc[index.row(), col] = checked   #modify the value of toDelete in _df
                 self.dataChanged.emit(index, index) #Emit a signal that data changed, and totals must be updated
                 return True
@@ -574,5 +599,7 @@ This script can be transformed in an executable via:
     python -m venv venv-outlook
     cd .\venv-outlook
     .\Scripts\activate
-    python -m pip install pandas, pywin32, PySide6-Essentials, pyinstaller --trusted-host pypi.org --trusted-host files.pythonhosted.org
-    pyinstaller.exe --hiddenimport win32timezone --onefile '.\Outlook - Cleaning.py' """
+    python -m pip install --upgrade pip, wheel --trusted-host pypi.org --trusted-host files.pythonhosted.org
+    python -m pip install --upgrade pandas, pywin32, PySide6-Essentials, pyinstaller --trusted-host pypi.org --trusted-host files.pythonhosted.org
+    pyinstaller.exe --hiddenimport win32timezone --onefile '.\Outlook - Cleaning.py'
+"""
