@@ -8,12 +8,12 @@ FOLDER_SIZE_LIMIT = 20000 #Can be adapted
 EXCLUDED_FOLDERS = [] #Here you may exclude the scanning of some folders, by their name. Ex: ['Boîte de réception',]
 INCLUDE_SUBFOLDERS = True #You might want to scan only top directory
 LOGGING_LEVEL = logging.INFO #DEBUG, INFO, WARNING, ERROR, CRITICAL
-VERSION = "2023-01-03"
+VERSION = "2023-07-04"
 HELP_TEXT = """This program will:
 
 1) scan your local outlook mail boxes
-- This can be you personal mail, or a shared mailbox if you have some
-- It does not scan old messages that are in the cloud
+- This can be you personal mail, or a shared mailbox if you have any
+- It does not scan old messages that are in the cloud only
 
 2) Propose you some emails for deletion
 - The following emails are proposed:
@@ -132,7 +132,7 @@ class MainWindow(ui_MainWindow): #Adds logic to the interface widgets
         logging.info(f"Running Outlook Cleaner version {VERSION}")
         super().__init__()
         self.interrupt = False #Flag that will be triggered if user chooses to cancels a background job
-        self.threadpool = QtCore.QThreadPool() #Pool for workers threads that will perform back ground work on emails
+        self.threadpool = QtCore.QThreadPool() #Pool for workers threads that will perform background work on emails
 
         self.help_action.triggered.connect(lambda x: self.helpText.show())
         self.mailbox_choice.currentIndexChanged.connect(self.mailbox_chosen_f)
@@ -157,7 +157,7 @@ class MainWindow(ui_MainWindow): #Adds logic to the interface widgets
         self.result_group.hide() #Hide results if we choose a different mailbox
         self.CurrentAccountName = self.mailbox_choice.currentText()
 
-    def initiate_new_step(self, text="Launching...", minimum=0, maximum=100):   #
+    def initiate_new_step(self, text="Launching...", minimum=0, maximum=100):
         self.find_button.setEnabled(False)
         self.mailbox_choice.setEnabled(False)
         self.progress_group.show()
@@ -170,7 +170,7 @@ class MainWindow(ui_MainWindow): #Adds logic to the interface widgets
 
     def get_outlook_dispatch(self, test_existing = False):
         """Connects to outlook for the first time. But also reconnects if connection was lost.
-        Because nfortunately, win32com is quite unstable when used in multithread."""
+        Because unfortunately, win32com is quite unstable when used in multithread."""
         if test_existing: #If a connection was previously set, we first test it
             try:
                 a = self.namespace.Folders[self.CurrentAccountName]
@@ -245,7 +245,7 @@ class MainWindow(ui_MainWindow): #Adds logic to the interface widgets
         elif status == 1: #QtCore.Qt.PartiallyChecked:
             if not(self.del_model.partially_checked): #Partially_checked can only be set by self.update_total, not by user
                 self.selectAll_checkbox.setCheckState(QtCore.Qt.Checked)
-        self.del_model.endResetModel()  #Inform data changed, and view should be updated
+        self.del_model.endResetModel()  #Inform that data changed, and view should be updated
 
     def print_error_detail(self):
         ex_type, ex_value, ex_traceback = sys.exc_info() #details of the error
@@ -269,7 +269,7 @@ class MainWindow(ui_MainWindow): #Adds logic to the interface widgets
                 subFolders = []
                 logging.info(f"{top_folder.Name} ignored for performance reasons because it has more than {self.FOLDER_SIZE_LIMIT} items")
             if self.INCLUDE_SUBFOLDERS:
-                for f in  top_folder.Folders: #List sub-folders recursively
+                for f in top_folder.Folders: #List sub-folders recursively
                     if f.DefaultMessageClass == "IPM.Note":
                         subFolders2, email_count2 = self.get_subFolders(f, top_folder, n+1)
                         subFolders += subFolders2
@@ -280,18 +280,18 @@ class MainWindow(ui_MainWindow): #Adds logic to the interface widgets
         self.worker_search.signals.newStep.emit("Counting emails...", 0, 100)
         self.get_outlook_dispatch(True)
         inbox = self.namespace.Folders[self.CurrentAccountName] #Inbox of the chosen mailbox
-        #IDs of folders that are excluded by default. https://docs.microsoft.com/fr-fr/office/vba/api/outlook.oldefaultfolders
         if self.EarlyBinding:
             OTHER_EXCLUDED_FOLDERS_ID = [winConstants.olFolderSyncIssues, winConstants.olFolderContacts
                 , winConstants.olFolderDrafts, winConstants.olFolderJournal, winConstants.olFolderRssFeeds]
-        else:
+            DELETED_FOLDER = self.namespace.GetDefaultFolder(winConstants.olFolderDeletedItems).Name #Deleted Items Folder name
+        else:   #IDs of folders that are excluded by default. https://docs.microsoft.com/fr-fr/office/vba/api/outlook.oldefaultfolders
             OTHER_EXCLUDED_FOLDERS_ID = [20, 10, 16, 11, 25]
+            DELETED_FOLDER = self.namespace.GetDefaultFolder(3).Name
         self.EXCLUDED_FOLDERS += [self.namespace.GetDefaultFolder(id).Name for id in OTHER_EXCLUDED_FOLDERS_ID]
-        DELETED_FOLDER = self.namespace.GetDefaultFolder(winConstants.olFolderDeletedItems).Name #Deleted Items Folder name
 
         try:
             top_folder = inbox
-            #top_folder = inbox.Folders["4-SUPP"].Folders["Réunions"]
+            #top_folder = inbox.Folders["4-SUPP"].Folders["Réunions"] #DEBUG
             #top_folder = inbox.Folders["Boîte de réception"] Éléments supprimés
             #top_folder = inbox.Folders["Éléments supprimés"]
         except:
@@ -324,7 +324,7 @@ class MainWindow(ui_MainWindow): #Adds logic to the interface widgets
                 for i2, mess2 in subList2.iterrows(): #Search messages in the same Conversation that contain mess
                     if all(att in mess2.atts for att in mess.atts): #First check: mess attachments are all in mess2
                         body_included = False
-                        if mess.body in mess2.body: #Second check:mess body is fully included in mess2
+                        if mess.body in mess2.body: #Second check: mess body is fully included in mess2
                             body_included = True
                         if body_included:
                             mess.body="" #We don't need body anymore
@@ -339,7 +339,7 @@ class MainWindow(ui_MainWindow): #Adds logic to the interface widgets
     def search_duplicates_b_return(self, deleteList):
         self.del_model = Delete_TableModel(deleteList) #Populate table of results
 
-        self.proxyModel = QtCore.QSortFilterProxyModel() #Allow sorting by colum. Doesn't work
+        self.proxyModel = QtCore.QSortFilterProxyModel() #Allow sorting by column
         self.proxyModel.setSourceModel(self.del_model)
         self.result_table.setSortingEnabled(True)
         self.result_table.sortByColumn(0, QtCore.Qt.AscendingOrder)
@@ -355,7 +355,7 @@ class MainWindow(ui_MainWindow): #Adds logic to the interface widgets
         self.result_table.setModel(self.proxyModel) #Show results in TableView
         self.result_table.resizeColumnsToContents()
 
-    def search_duplicates_b_progress(self, n,): #call back function to trak progress of search_duplicates_b()
+    def search_duplicates_b_progress(self, n,): #call back function to track progress of search_duplicates_b()
         self.setProgress(n)
 
     def search_duplicates_b_error(self, err_tuple):
@@ -396,9 +396,13 @@ class MainWindow(ui_MainWindow): #Adds logic to the interface widgets
                     toDelete = False
                     body = ''.join([line.strip() for line in message.Body.splitlines()]) #We remove line breaks followed by spaces that are sometimes changed in replies
                     if "<mailto:" in body: #Sometimes the name is inserted in the mail of a reply. We remove it
-                        body = self.remove_mailtos(body)
+                        body = MainWindow.remove_mailtos(body)
                     if " <http" in body: #Sometimes the URL is modified. We remove it
-                        body = self.remove_urls(body)
+                        body = MainWindow.remove_urls(body)
+                    body = MainWindow.find_replace_text(body, "C1 - Internal use", "C1 - Internal use", "")   #Sometimes a Confidentiality status is inserted. We remove it
+                    body = MainWindow.find_replace_text(body, "C2 - Confidential", "C2 - Confidential", "")
+                    body = MainWindow.find_replace_text(body, "C3 - Highly Confidential", "C3 - Highly Confidential", "")
+                    #print("ZZ", body) #DEBUG
                     attachments = message.Attachments
                     for att in attachments:
                         try:
@@ -422,7 +426,8 @@ class MainWindow(ui_MainWindow): #Adds logic to the interface widgets
         messageList = messageList.sort_values(by=['date'], ascending=[True])
         return messageList, deleteList
 
-    def remove_mailtos(self, body):
+    @classmethod
+    def remove_mailtos(cls, body):
         """Called by search_duplicates_b. Remove the <mailto:> tag that is sometimes inserted after a mail"""
         pattern = " <mailto:[\w.\-]+@[\w.\-]+.\w+> ?" #search for " <mailto:" followed by a mail
         mailtos = re.findall(pattern, body)
@@ -431,7 +436,8 @@ class MainWindow(ui_MainWindow): #Adds logic to the interface widgets
             body = body.replace(mailto, '')
         return body
 
-    def remove_urls(self, body):
+    @classmethod
+    def remove_urls(cls, body):
         """Called by search_duplicates_b. Remove the <https:> tag that is sometimes inserted after an URL"""
         pattern = r" <https?:\/\/[\w.\-\+\/]+> ?" #search for " <http(s)://...>"
         nb_char_deleted = 0 #positions will be shifted if we delete content
@@ -444,6 +450,17 @@ class MainWindow(ui_MainWindow): #Adds logic to the interface widgets
                 if (pos+len(url_bare)) == (url.start()-nb_char_deleted):
                     body = body[:url.start()-nb_char_deleted] + body[url.end()-nb_char_deleted:]
                     nb_char_deleted += url.end() - url.start()
+        return body
+
+    @classmethod
+    def find_replace_text(cls, body, search_string, oldstring, newstring):
+        #If search_string is in body, replace oldstring by newstring
+        #N.B. oldstring may be equal to search_string, or contain only its first characters
+        while True:
+            pos = body.find(search_string)
+            if pos==-1:
+                break
+            body = body[:pos] + newstring + body[pos+len(oldstring):]
         return body
 
     @QtCore.Slot()
